@@ -1,424 +1,231 @@
-Dynarmic
-========
+# PearLegacyJIT
 
-[![Github Actions Build Status (x86-64)](https://github.com/MerryMage/dynarmic/actions/workflows/x86-64.yml/badge.svg)](https://github.com/MerryMage/dynarmic/actions/workflows/x86-64.yml) [![Github Actions Build Status (AArch64)](https://github.com/merryhime/dynarmic/actions/workflows/aarch64.yml/badge.svg)](https://github.com/MerryMage/dynarmic/actions/workflows/AArch64.yml)
+A Dynarmic-based dynamic recompiler, specialized for **PearLegacyEngine** on
+Apple Silicon.
 
-A dynamic recompiler for ARM.
-
-Highlight features:
-
-- Fast dynamic binary translation via Just-in-Time compilation
-- Clean API
-- Implemented in modern C++20
-- Hooks exposed for easy code instrumentation
-- Code injection support for very fine-grained instrumentation
-- Support for unusual address space setups (bring-your-own memory system)
-- Native support for most popular operating systems (Windows, macOS, Linux, FreeBSD, OpenBSD, NetBSD, Android)
-
-*Please note that an adversarial guest program [can determine if it is being run under dynarmic](#disadvantages-of-dynarmic). Preventing this is not a goal of this project.*
-
-### Supported guest architectures
-
-* v3
-* v4
-* v4T
-* v5TE
-* v6K
-* v6T2
-* v7A
-* 32-bit v8
-* 64-bit v8
-
-You can specify the specific guest version using [ArchVersion](src/dynarmic/interface/A32/arch_version.h).
-
-There are no plans to support v1 or v2.
-
-### Supported host architectures
-
-* x86-64
-* AArch64
-
-There are no plans to support any 32-bit architecture.
-
-Important API Changes in v6.x Series
-------------------------------------
-
-* **v6.7.0**
-  * To support use cases where one wants to have the guest to have the same address space as the host, `nullptr` is now a valid value for `fastmem_pointer`.
-    **This change is not backwards-compatible.** If you were previously using `nullptr` to represent an invalid fastmem arena, you will now have to use `std::nullopt`.
-
-
-Documentation
--------------
-
-Design documentation can be found at [docs/Design.md](docs/Design.md).
-
-
-Usage Example
--------------
-
-The below is a minimal example. Bring-your-own memory system.
-
-```cpp
-#include <array>
-#include <cstdint>
-#include <cstdio>
-#include <exception>
-
-#include "dynarmic/interface/A32/a32.h"
-#include "dynarmic/interface/A32/config.h"
-
-using u8 = std::uint8_t;
-using u16 = std::uint16_t;
-using u32 = std::uint32_t;
-using u64 = std::uint64_t;
-
-class MyEnvironment final : public Dynarmic::A32::UserCallbacks {
-public:
-    u64 ticks_left = 0;
-    std::array<u8, 2048> memory{};
-
-    u8 MemoryRead8(u32 vaddr) override {
-        if (vaddr >= memory.size()) {
-            return 0;
-        }
-        return memory[vaddr];
-    }
-
-    u16 MemoryRead16(u32 vaddr) override {
-        return u16(MemoryRead8(vaddr)) | u16(MemoryRead8(vaddr + 1)) << 8;
-    }
-
-    u32 MemoryRead32(u32 vaddr) override {
-        return u32(MemoryRead16(vaddr)) | u32(MemoryRead16(vaddr + 2)) << 16;
-    }
-
-    u64 MemoryRead64(u32 vaddr) override {
-        return u64(MemoryRead32(vaddr)) | u64(MemoryRead32(vaddr + 4)) << 32;
-    }
-
-    void MemoryWrite8(u32 vaddr, u8 value) override {
-        if (vaddr >= memory.size()) {
-            return;
-        }
-        memory[vaddr] = value;
-    }
-
-    void MemoryWrite16(u32 vaddr, u16 value) override {
-        MemoryWrite8(vaddr, u8(value));
-        MemoryWrite8(vaddr + 1, u8(value >> 8));
-    }
-
-    void MemoryWrite32(u32 vaddr, u32 value) override {
-        MemoryWrite16(vaddr, u16(value));
-        MemoryWrite16(vaddr + 2, u16(value >> 16));
-    }
-
-    void MemoryWrite64(u32 vaddr, u64 value) override {
-        MemoryWrite32(vaddr, u32(value));
-        MemoryWrite32(vaddr + 4, u32(value >> 32));
-    }
-
-    void InterpreterFallback(u32 pc, size_t num_instructions) override {
-        // This is never called in practice.
-        std::terminate();
-    }
-
-    void CallSVC(u32 swi) override {
-        // Do something.
-    }
-
-    void ExceptionRaised(u32 pc, Dynarmic::A32::Exception exception) override {
-        // Do something.
-    }
-
-    void AddTicks(u64 ticks) override {
-        if (ticks > ticks_left) {
-            ticks_left = 0;
-            return;
-        }
-        ticks_left -= ticks;
-    }
-
-    u64 GetTicksRemaining() override {
-        return ticks_left;
-    }
-};
-
-int main(int argc, char** argv) {
-    MyEnvironment env;
-    Dynarmic::A32::UserConfig user_config;
-    user_config.callbacks = &env;
-    Dynarmic::A32::Jit cpu{user_config};
-
-    // Execute at least 1 instruction.
-    // (Note: More than one instruction may be executed.)
-    env.ticks_left = 1;
-
-    // Write some code to memory.
-    env.MemoryWrite16(0, 0x0088); // lsls r0, r1, #2
-    env.MemoryWrite16(2, 0xE7FE); // b +#0 (infinite loop)
-
-    // Setup registers.
-    cpu.Regs()[0] = 1;
-    cpu.Regs()[1] = 2;
-    cpu.Regs()[15] = 0; // PC = 0
-    cpu.SetCpsr(0x00000030); // Thumb mode
-
-    // Execute!
-    cpu.Run();
-
-    // Here we would expect cpu.Regs()[0] == 8
-    printf("R0: %u\n", cpu.Regs()[0]);
-
-    return 0;
-}
-```
-
-Alternatives to Dynarmic
-------------------------
-
-Here are some projects with the same goals as dynarmic:
-
-* [Unicorn](https://www.unicorn-engine.org/) - Recompiling multi-architecture CPU emulator, based on QEMU
-* [SkyEye](http://skyeye.sourceforge.net) - Cached interpreter for ARM
-
-More general alternatives:
-
-* [tARMac](https://davidsharp.com/tarmac/) - Tarmac's use of armlets was initial inspiration for us to use an intermediate representation
-* [QEMU](https://www.qemu.org/) - Recompiling multi-architecture system emulator
-* [VisUAL](https://salmanarif.bitbucket.io/visual/index.html) - Visual ARM UAL emulator intended for education
-* A wide variety of other recompilers, interpreters and emulators can be found embedded in other projects, here are some we would recommend looking at:
-  * [firebird's recompiler](https://github.com/nspire-emus/firebird) - Takes more of a call-threaded approach to recompilation
-  * [higan's arm7tdmi emulator](https://github.com/higan-emu/higan/tree/master/higan/component/processor/arm7tdmi) - Very clean code-style
-  * [arm-js by ozaki-r](https://github.com/ozaki-r/arm-js) - Emulates ARMv7A and some peripherals of Versatile Express, in the browser
-
-Disadvantages of Dynarmic
--------------------------
-
-In the pursuit of speed, some behavior not commonly depended upon is elided. Therefore this emulator does not match spec.
-Please note that this would mean that a guest application can easily determine if it is being run under instrumentation.
-
-Known examples:
-
-* Only user-mode is emulated, there is no emulation of any other privilege levels.
-* FPSR state is approximate.
-* Misaligned loads/stores are not appropriately trapped in certain cases.
-* Exclusive monitor behavior may not match any known physical processor.
-
-No formal verification has been done, and no security assessment has been made.
-Use this code base at your own risk.
-
-Legal
------
-
-dynarmic is under a 0BSD license. See LICENSE.txt for more details.
-
-dynarmic uses several other libraries, whose licenses are included below:
-
-### biscuit
+PearLegacyJIT is a fork of [Dynarmic](https://github.com/MerryMage/dynarmic),
+the ARM dynamic recompiler written by **merryhime** (`MerryMage`,
+<git@mary.rs>) and contributors. All of the groundwork — the A32 frontend, the
+IR and its optimization passes, the AArch64 backend, the block cache, the
+fastmem machinery and the test suite — is Dynarmic's work, licensed under the
+0BSD-style terms reproduced in [LICENSE.txt](LICENSE.txt). Changes in this fork
+are limited to the build profile, tuning and integration described below. It is
+not a rewrite, and it does not claim authorship of the underlying translator.
 
 ```
-Copyright 2021 Lioncash/Lioncache
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
-to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
-and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-IN THE SOFTWARE.
+Original project:  https://github.com/MerryMage/dynarmic   (merryhime)
+Direct base:       https://github.com/touchHLE/dynarmic     (touchHLE)
 ```
 
-### catch
+## Why this fork exists
 
-```
-Boost Software License - Version 1.0 - August 17th, 2003
+PearLegacyEngine runs 32-bit iOS applications (Miku Flick, Miku Flick/02,
+Asphalt 6, …) on Apple Silicon Macs running macOS 26 or later. Their ARMv7 and
+Thumb-2 guest code is executed by Dynarmic, so every microsecond of translation
+overhead, every guest memory access and every guest-to-host transition shows up
+directly as frame-time jitter in those games.
 
-Permission is hereby granted, free of charge, to any person or organization
-obtaining a copy of the software and accompanying documentation covered by
-this license (the "Software") to use, reproduce, display, distribute,
-execute, and transmit the Software, and to prepare derivative works of the
-Software, and to permit third-parties to whom the Software is furnished to
-do so, all subject to the following:
+The mission of this fork is narrow and measurable:
 
-The copyright notices in the Software and this entire statement, including
-the above license grant, this restriction and the following disclaimer,
-must be included in all copies of the Software, in whole or in part, and
-all derivative works of the Software, unless such copies or derivative
-works are solely in the form of machine-executable object code generated by
-a source language processor.
+> Optimize Dynarmic for ARMv7/Thumb-2 guest code running on Apple Silicon under
+> PearLegacyEngine, without changing guest-visible behaviour.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
-SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
-FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-```
+Correctness first, performance second, maintainability third. Guest CPU
+semantics, exception behaviour, memory ordering and floating-point behaviour are
+never traded for benchmark scores.
 
-### fmt
+## What this fork is built from
 
-```
-Copyright (c) 2012 - present, Victor Zverovich and {fmt} contributors
+| Item | Value |
+| --- | --- |
+| Upstream project | MerryMage/dynarmic, version 6.7.0 |
+| Direct base | touchHLE/dynarmic master (`e0f6bd9d`) |
+| Guest support needed | ARMv7-A and Thumb-2 (A32 frontend), VFP/NEON |
+| Host architecture | AArch64 (Apple Silicon) only |
+| Minimum OS | macOS 26.0 |
+| Guest 64-bit support | not built |
 
-Permission is hereby granted, free of charge, to any person obtaining
-a copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
+The direct base is touchHLE/dynarmic rather than MerryMage/dynarmic master
+because touchHLE/dynarmic is a few commits ahead (bundled `fmt` 12.0.0, which
+modern Apple Clang requires, and an `mcl::list_sequence` fix for clang 20).
+Those commits are already part of what PearLegacyEngine links against, so the
+fork tracks them instead of diverging.
 
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
+## Usage
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+This repository is not used on its own. It is consumed as the `dynarmic` source
+tree of PearLegacyEngine:
 
---- Optional exception to the license ---
-
-As an exception, if, as a result of your compiling your source code, portions
-of this Software are embedded into a machine-executable object form of such
-source code, you may redistribute such embedded portions in such object form
-without including the above copyright and permission notices.`
+```sh
+# In PearLegacyEngine:
+git clone https://github.com/denizomer10/PearLegacyJIT vendor/dynarmic
+cargo build --release
 ```
 
-### mcl & oaknut
+`src/cpu/dynarmic_wrapper/build.rs` configures this tree with CMake, passing
+`DYNARMIC_FRONTENDS=A32`, and links it as a static library because Dynarmic
+cannot be dynamically linked. Set `PEAR_DYNARMIC_ROOT` to build against a
+checkout somewhere other than `vendor/dynarmic`.
 
-```
-MIT License
+### Build profile: `pearlegacy-apple-silicon`
 
-Copyright (c) 2022 merryhime <https://mary.rs>
+`CMakePresets.json` contains the profile PearLegacyEngine builds:
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+```sh
+cmake --preset pearlegacy-apple-silicon \
+    -DBoost_INCLUDE_DIR="$(brew --prefix boost)/include"
+cmake --build --preset pearlegacy-apple-silicon
 ```
 
-### robin-map
+The non-negotiable parts of the profile:
+
+* `CMAKE_OSX_ARCHITECTURES=arm64` — no x86_64, no fat binaries.
+* `CMAKE_OSX_DEPLOYMENT_TARGET=26.0` — macOS 26 or later.
+* `DYNARMIC_FRONTENDS=A32` — the A64 guest frontend is not compiled at all.
+* `DYNARMIC_TESTS=OFF` — the tests have their own preset.
+* `DYNARMIC_USE_BUNDLED_EXTERNALS=ON` — self-contained, reproducible build.
+
+A matching `pearlegacy-apple-silicon-tests` preset enables the upstream
+correctness tests, for differential testing after an optimization.
+
+Verified output of the profile:
 
 ```
-MIT License
-
-Copyright (c) 2017 Thibaut Goetghebuer-Planchon <tessil@gmx.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+$ lipo -archs build-pearlegacy-apple-silicon/src/dynarmic/libdynarmic.a
+arm64
+$ otool -l … | grep minos
+    minos 26.0
 ```
 
-### xbyak
+### macOS fast memory access
+
+On macOS, Dynarmic's fastmem support depends on `mach/mach_exc.defs` being
+found at configure time. If it is not found, CMake silently falls back to the
+generic exception handler and guest memory access becomes dramatically slower.
+The profile is only correct if configuration prints:
 
 ```
-Copyright (c) 2007 MITSUNARI Shigeo
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-Redistributions of source code must retain the above copyright notice, this
-list of conditions and the following disclaimer.
-Redistributions in binary form must reproduce the above copyright notice,
-this list of conditions and the following disclaimer in the documentation
-and/or other materials provided with the distribution.
-Neither the name of the copyright owner nor the names of its contributors may
-be used to endorse or promote products derived from this software without
-specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
-THE POSSIBILITY OF SUCH DAMAGE.
------------------------------------------------------------------------------
-ソースコード形式かバイナリ形式か、変更するかしないかを問わず、以下の条件を満た
-す場合に限り、再頒布および使用が許可されます。
-
-ソースコードを再頒布する場合、上記の著作権表示、本条件一覧、および下記免責条項
-を含めること。
-バイナリ形式で再頒布する場合、頒布物に付属のドキュメント等の資料に、上記の著作
-権表示、本条件一覧、および下記免責条項を含めること。
-書面による特別の許可なしに、本ソフトウェアから派生した製品の宣伝または販売促進
-に、著作権者の名前またはコントリビューターの名前を使用してはならない。
-本ソフトウェアは、著作権者およびコントリビューターによって「現状のまま」提供さ
-れており、明示黙示を問わず、商業的な使用可能性、および特定の目的に対する適合性
-に関する暗黙の保証も含め、またそれに限定されない、いかなる保証もありません。
-著作権者もコントリビューターも、事由のいかんを問わず、 損害発生の原因いかんを
-問わず、かつ責任の根拠が契約であるか厳格責任であるか（過失その他の）不法行為で
-あるかを問わず、仮にそのような損害が発生する可能性を知らされていたとしても、
-本ソフトウェアの使用によって発生した（代替品または代用サービスの調達、使用の
-喪失、データの喪失、利益の喪失、業務の中断も含め、またそれに限定されない）直接
-損害、間接損害、偶発的な損害、特別損害、懲罰的損害、または結果損害について、
-一切責任を負わないものとします。
+-- mach/mach_exc.defs location: …/Kernel.framework/Headers
 ```
 
-### zydis
+The `mig`-generated Mach exception stubs are written into
+`src/dynarmic/backend/*/mig/` by CMake, so a fresh clone has none until it has
+been configured once. They are build output, not source.
+
+## Execution architecture
+
+Dynarmic translates guest ARMv7/Thumb-2 code to AArch64 in blocks, ahead of
+execution, and caches the result:
 
 ```
-The MIT License (MIT)
-
-Copyright (c) 2014-2020 Florian Bernd
-Copyright (c) 2014-2020 Joel Höner
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+guest code ──► A32 frontend ──► IR ──► optimization passes ──► AArch64 backend
+   │                                                                   │
+   │                                                       block cache (JIT arena)
+   │                                                                   │
+   └── page table + fastmem ────────────────────────────────► compiled block
 ```
+
+The parts that matter most to PearLegacyEngine:
+
+* **Guest memory access.** With fastmem active, guest loads and stores use host
+  memory directly through a page table; a fault is caught by the macOS Mach
+  exception handler and resolved through `Memory::Read`/`Write` callbacks.
+  Without fastmem, *every* access is a callback.
+* **Block cache.** Blocks are looked up by guest address in a hash map. Too
+  small an arena means recompilation; too large an arena means worse code
+  locality.
+* **HLE transitions.** PearLegacyEngine's iOS frameworks are host functions
+  called from translated guest code, so the cost of saving and restoring guest
+  registers at that boundary is paid on every framework call — and games call
+  frameworks constantly, every frame, touch and buffer swap.
+* **`MAP_JIT` and instruction-cache coherency.** The JIT arena is written and
+  then executed, which on Apple Silicon requires `MAP_JIT`, correct
+  `pthread_jit_write_protect_np` transitions and instruction-cache
+  invalidation.
+
+## Benchmarking and validation rules
+
+No claim in this repository is valid without a measured number and a way to
+reproduce it. Every optimization follows the same loop:
+
+1. Reproduce and measure the current behaviour.
+2. State a hypothesis naming the specific cost.
+3. Make the smallest change that tests the hypothesis.
+4. Build with `pearlegacy-apple-silicon`.
+5. Run `dynarmic_tests` — a performance win that breaks a test is reverted.
+6. Measure again with the same methodology.
+7. Keep the change only if it improves; record what was measured.
+8. Check in-game behaviour in Miku Flick/02: frame pacing, audio sync, input.
+
+Correctness gate for every change:
+
+```sh
+cmake --preset pearlegacy-apple-silicon-tests \
+    -DBoost_INCLUDE_DIR="$(brew --prefix boost)/include"
+cmake --build --preset pearlegacy-apple-silicon-tests
+./build-pearlegacy-apple-silicon-tests/tests/dynarmic_tests
+```
+
+Current baseline of that gate on Apple Silicon:
+
+```
+All tests passed (200561 assertions in 47 test cases)
+```
+
+PearLegacyEngine's own runtime checks are the only valid evidence for in-game
+results:
+
+* `PEAR_PRESENT_STATS=1` — present-time average, worst case, frames over 33 ms.
+* `PEAR_CONTENT_SELFTEST=1` — verifies the frame is really drawn, not black.
+* `PEAR_TOUCH_SCRIPT=<file>` — replays scripted input so runs are repeatable.
+
+### Baseline to compare against
+
+The reference for every comparison is the same source tree configured with
+upstream-compatible settings, on the same machine with the same guest workload,
+so that only the optimization under test differs. Values are added to the table
+when an actual measurement exists; an empty cell means "not measured yet", not
+"no improvement".
+
+| Measure | Baseline | Optimized | Status |
+| --- | --- | --- | --- |
+| A32 translation throughput | — | — | not measured yet |
+| Block compilation latency | — | — | not measured yet |
+| Block cache hit rate | — | — | not measured yet |
+| Guest memory access overhead | — | — | not measured yet |
+| HLE callback boundary cost | — | — | not measured yet |
+| Miku Flick/02 present time | 5905 slow-path frames, up to 332 ms each | avg 0.8 ms, max 1.3 ms | measured in PearLegacyEngine (graphics, not JIT) |
+
+## Scope: what is intentionally not built
+
+Dynarmic supports far more than PearLegacyEngine needs. The profile leaves out
+what a 32-bit iOS app on Apple Silicon cannot reach:
+
+* the A64 guest frontend (`DYNARMIC_FRONTENDS=A32`),
+* the x86-64 and RISC-V host backends (not compiled for an arm64 build),
+* the unicorn-based fuzzing harness (`DYNARMIC_TESTS_USE_UNICORN=OFF`),
+* LLVM-based x86 JIT disassembly (`DYNARMIC_USE_LLVM=OFF`).
+
+Nothing is deleted from the source tree: keeping the upstream layout intact is
+what makes it possible to pull upstream fixes and to run the full test suite
+when a change looks suspicious.
+
+## Known limits
+
+* The block cache is not designed around one long-running game with a fixed
+  working set; arena sizing and recompilation remain open questions.
+* macOS fastmem depends on configure-time discovery of `mach_exc.defs`, and the
+  fallback is silent. Always check the configure log.
+* An adversarial guest can detect that it runs under Dynarmic. That is an
+  upstream property, and this fork does not try to hide it.
+
+## Credits
+
+* Dynarmic and its AArch64 backend: **merryhime** and the Dynarmic
+  contributors — <https://github.com/MerryMage/dynarmic>.
+* The touchHLE/dynarmic commits this fork builds on: the touchHLE project —
+  <https://github.com/touchHLE/dynarmic>.
+* PearLegacyEngine integration and the `pearlegacy-apple-silicon` profile:
+  PearLegacyEngine contributors.
+
+Licensed under the same terms as Dynarmic; see [LICENSE.txt](LICENSE.txt).

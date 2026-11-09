@@ -1,0 +1,50 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "pearlegacy-apple-silicon",
+      "displayName": "PearLegacy Apple Silicon (A32, macOS 26+, arm64)",
+      "description": "The profile PearLegacyEngine builds. A32 frontend only, no tests, no 64-bit guest, no foreign host backends.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-pearlegacy-apple-silicon",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "26.0",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "DYNARMIC_FRONTENDS": "A32",
+        "DYNARMIC_TESTS": "OFF",
+        "DYNARMIC_USE_LLVM": "OFF",
+        "DYNARMIC_USE_BUNDLED_EXTERNALS": "ON",
+        "DYNARMIC_WARNINGS_AS_ERRORS": "OFF",
+        "DYNARMIC_FATAL_ERRORS": "OFF",
+        "DYNARMIC_USE_PRECOMPILED_HEADERS": "ON"
+      }
+    },
+    {
+      "name": "pearlegacy-apple-silicon-tests",
+      "displayName": "PearLegacy Apple Silicon + A32 tests",
+      "description": "Same profile with the upstream correctness tests enabled, for differential testing after an optimization.",
+      "inherits": "pearlegacy-apple-silicon",
+      "binaryDir": "${sourceDir}/build-pearlegacy-apple-silicon-tests",
+      "cacheVariables": {
+        "DYNARMIC_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "pearlegacy-apple-silicon",
+      "configurePreset": "pearlegacy-apple-silicon"
+    },
+    {
+      "name": "pearlegacy-apple-silicon-tests",
+      "configurePreset": "pearlegacy-apple-silicon-tests"
+    }
+  ]
+}
