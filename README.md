@@ -179,6 +179,20 @@ results:
 * `PEAR_CONTENT_SELFTEST=1` — verifies the frame is really drawn, not black.
 * `PEAR_TOUCH_SCRIPT=<file>` — replays scripted input so runs are repeatable.
 
+### Running the benchmark
+
+```sh
+cmake --preset pearlegacy-apple-silicon-bench \
+    -DBoost_INCLUDE_DIR="$(brew --prefix boost)/include"
+cmake --build --preset pearlegacy-apple-silicon-bench
+./build-pearlegacy-apple-silicon-bench/benchmarks/dynarmic_bench
+```
+
+Useful flags: `--repeats N` (default 3, best run wins), `--scale X` (multiplies
+iteration and block counts), `--compile-body N` (mul/eor pairs per compiled
+block, so translation can be measured on realistically sized blocks),
+`--no-ir-verification`, `--no-halt-check`, `--verbose`.
+
 ### Baseline to compare against
 
 The reference for every comparison is the same source tree configured with
@@ -189,12 +203,43 @@ when an actual measurement exists; an empty cell means "not measured yet", not
 
 | Measure | Baseline | Optimized | Status |
 | --- | --- | --- | --- |
-| A32 translation throughput | — | — | not measured yet |
-| Block compilation latency | — | — | not measured yet |
+| A32 execution, ALU chain (72 guest insns/iter) | 8.5 ns/iter | — | measured |
+| A32 execution, block dispatch (11 guest insns/iter) | 1.3 ns/iter | — | measured (blocked linked, not optimized) |
+| A32 execution, guest memory loop (10 guest insns/iter) | 1.3 ns/iter | — | measured |
+| Block compilation latency, 3-instruction block | 4.59 µs/block | 4.42 µs/block | 3.7% with IR verification off |
+| Block compilation latency, 33-instruction block | 28.26 µs/block | 26.70 µs/block | 5.5% with IR verification off |
+| `check_halt_on_memory_access` cost | 1.3 ns/iter | 1.5 ns/iter | no benefit when off — see below |
 | Block cache hit rate | — | — | not measured yet |
-| Guest memory access overhead | — | — | not measured yet |
 | HLE callback boundary cost | — | — | not measured yet |
 | Miku Flick/02 present time | 5905 slow-path frames, up to 332 ms each | avg 0.8 ms, max 1.3 ms | measured in PearLegacyEngine (graphics, not JIT) |
+
+Methodology for the four measured rows:
+
+* Machine: Apple A18 Pro, macOS 27.2, arm64, `pearlegacy-apple-silicon` release.
+* Harness: `dynarmic_bench`, which links `libdynarmic.a` with the engine's exact
+  `UserConfig` (absolute-offset page table, cycle counting on).
+* Each row is the best of three runs; `--scale` changes iteration counts and was
+  checked to scale linearly so the timings are not first-block artefacts.
+* Guest MIPS is *not* reported: `AddTicks` receives the static tick count of the
+  translated block, including instructions the optimiser removed, so any MIPS
+  figure derived from it would overstate throughput.
+
+Two hypotheses were tested and rejected by measurement, which is why the table
+has no "improvement" in those rows:
+
+* **Per-access halt checks.** `check_halt_on_memory_access` sounds like a
+  per-access branch, but `EmitA32CheckMemoryAbort` returns immediately when the
+  flag is off, and when the flag is on the check is emitted *only* on the
+  memory-callback slow path — an in-range access pays nothing. Turning the flag
+  off measured 1.5 ns/iter against 1.3 ns/iter on; the difference is noise, so
+  the engine keeps the safer setting.
+* **Block dispatch overhead.** A call plus hash lookup per block exit would be
+  the largest architectural cost, but `AddressSpace::block_references` already
+  links blocks directly: a branch whose target is already compiled is patched
+  into a direct jump. 1.3 ns/iter for a two-block transition confirms the
+  dispatcher is not on the hot path. Note that dynarmic also compiles a branch
+  to the current block's own start into an inline self-loop, so a naive
+  self-loop benchmark measures neither dispatch nor linking.
 
 ## Scope: what is intentionally not built
 

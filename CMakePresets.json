@@ -35,6 +35,16 @@
       "cacheVariables": {
         "DYNARMIC_TESTS": "ON"
       }
+    },
+    {
+      "name": "pearlegacy-apple-silicon-bench",
+      "displayName": "PearLegacy Apple Silicon + benchmark",
+      "description": "Same profile as the engine build, with the guest throughput benchmark enabled.",
+      "inherits": "pearlegacy-apple-silicon",
+      "binaryDir": "${sourceDir}/build-pearlegacy-apple-silicon-bench",
+      "cacheVariables": {
+        "DYNARMIC_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -45,6 +55,10 @@
     {
       "name": "pearlegacy-apple-silicon-tests",
       "configurePreset": "pearlegacy-apple-silicon-tests"
+    },
+    {
+      "name": "pearlegacy-apple-silicon-bench",
+      "configurePreset": "pearlegacy-apple-silicon-bench"
     }
   ]
 }

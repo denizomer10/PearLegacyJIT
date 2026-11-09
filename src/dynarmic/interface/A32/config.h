@@ -224,6 +224,11 @@ struct UserConfig {
     /// for exit after every data memory access by the emulated program.
     bool check_halt_on_memory_access = false;
 
+    /// Run IR verification on every translated block. This is a debugging aid: it
+    /// is expensive at translation time and has no effect on the generated code.
+    /// Disable it in release builds once the backend is trusted.
+    bool enable_ir_verification = true;
+
     /// This option allows you to disable cycle counting. If this is set to false,
     /// AddTicks and GetTicksRemaining are never called, and no cycle counting is done.
     bool enable_cycle_counting = true;

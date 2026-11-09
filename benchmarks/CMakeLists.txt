@@ -1,0 +1,2 @@
+add_executable(dynarmic_bench a32_throughput.cpp)
+target_link_libraries(dynarmic_bench PRIVATE dynarmic)
