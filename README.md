@@ -209,11 +209,11 @@ when an actual measurement exists; an empty cell means "not measured yet", not
 | Block compilation latency, 3-instruction block | 4.59 µs/block | 4.42 µs/block | 3.7% with IR verification off |
 | Block compilation latency, 33-instruction block | 28.26 µs/block | 26.70 µs/block | 5.5% with IR verification off |
 | `check_halt_on_memory_access` cost | 1.3 ns/iter | 1.5 ns/iter | no benefit when off — see below |
+| HLE round trip (guest `svc` -> host -> re-enter) | 12.7 ns/call | — | measured |
 | Block cache hit rate | — | — | not measured yet |
-| HLE callback boundary cost | — | — | not measured yet |
 | Miku Flick/02 present time | 5905 slow-path frames, up to 332 ms each | avg 0.8 ms, max 1.3 ms | measured in PearLegacyEngine (graphics, not JIT) |
 
-Methodology for the four measured rows:
+Methodology for the measured rows:
 
 * Machine: Apple A18 Pro, macOS 27.2, arm64, `pearlegacy-apple-silicon` release.
 * Harness: `dynarmic_bench`, which links `libdynarmic.a` with the engine's exact
@@ -233,6 +233,11 @@ has no "improvement" in those rows:
   memory-callback slow path — an in-range access pays nothing. Turning the flag
   off measured 1.5 ns/iter against 1.3 ns/iter on; the difference is noise, so
   the engine keeps the safer setting.
+* **HLE callback boundary cost.** A framework call costs the guest a `svc`, a
+  halt, host-side handling, and a re-entry. That whole round trip measures
+  12.7 ns, so the JIT side of the boundary is not where framework-call time
+  goes; any remaining cost is in the handler itself, not in crossing the
+  boundary.
 * **Block dispatch overhead.** A call plus hash lookup per block exit would be
   the largest architectural cost, but `AddressSpace::block_references` already
   links blocks directly: a branch whose target is already compiled is patched

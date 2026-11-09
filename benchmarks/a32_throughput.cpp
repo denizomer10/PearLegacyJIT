@@ -385,6 +385,58 @@ double TimeCompile(int blocks, bool halt_check, bool verify_ir, double* seconds_
     return double(*seconds_out) * 1e6 / double(blocks);
 }
 
+// Measures the cost of a guest -> host -> guest round trip, which is what every
+// HLE framework call costs: the guest executes `svc`, which requests a halt, the
+// host handles the call, and the guest is re-entered. One iteration is one whole
+// round trip, so this is the boundary cost the engine pays per framework call.
+double TimeSvcRoundTrip(int iterations, double* seconds_out) {
+    // svc #0 followed by an endless branch, so a run always stops on the svc.
+    std::vector<std::uint32_t> code{ARM_SVC_0, ARM_B_0 | 0xFFFFFEu};
+    std::vector<std::uint8_t> memory(kGuestSize, 0);
+    BenchEnv env{memory};
+    std::memcpy(memory.data(), code.data(), code.size() * sizeof(std::uint32_t));
+
+    auto page_table =
+        std::make_unique<std::array<std::uint8_t*, Dynarmic::A32::UserConfig::NUM_PAGE_TABLE_ENTRIES>>();
+    page_table->fill(nullptr);
+    constexpr std::size_t first_page = kGuestBase >> Dynarmic::A32::UserConfig::PAGE_BITS;
+    constexpr std::size_t page_count = kGuestSize >> Dynarmic::A32::UserConfig::PAGE_BITS;
+    for (std::size_t i = 0; i < page_count; i++) {
+        (*page_table)[first_page + i] = memory.data() + (i << Dynarmic::A32::UserConfig::PAGE_BITS);
+    }
+
+    Dynarmic::A32::UserConfig config;
+    config.callbacks = &env;
+    config.page_table = page_table.get();
+    config.absolute_offset_page_table = true;
+    config.check_halt_on_memory_access = true;
+
+    auto jit = std::make_unique<Dynarmic::A32::Jit>(config);
+    env.cpu = jit.get();
+    jit->Regs().fill(0);
+    jit->SetCpsr(0x00000010);
+
+    // Translate once up front so the measurement is the round trip and not the
+    // first-block compilation.
+    jit->Regs()[15] = kGuestBase;
+    jit->Run();
+
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < iterations; i++) {
+        jit->Regs()[15] = kGuestBase;
+        const auto halt_reason = jit->Run();
+        if (!Dynarmic::Has(halt_reason, Dynarmic::HaltReason::UserDefined1)) {
+            std::fprintf(stderr, "hle: unexpected halt reason %08x\n",
+                         static_cast<unsigned>(halt_reason));
+            std::abort();
+        }
+    }
+    const auto end = std::chrono::steady_clock::now();
+
+    *seconds_out = std::chrono::duration<double>(end - start).count();
+    return *seconds_out * 1e9 / double(iterations);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -485,6 +537,24 @@ int main(int argc, char** argv) {
         std::printf("  %-9s %10d blocks     in %7.3fs  %8.1f kblocks/s  %8.2f us/block\n",
                     "compile", blocks, best_seconds, double(blocks) / best_seconds / 1000.0,
                     us_per_block);
+    }
+
+    // Cost of one HLE round trip: halt on svc, host handles it, re-enter.
+    {
+        const int iterations = int(200000 * g_scale);
+        double best_seconds = 1e9;
+        double ns_per_round_trip = 0.0;
+        for (int r = 0; r < repeats; r++) {
+            double seconds = 0.0;
+            const auto ns = TimeSvcRoundTrip(iterations, &seconds);
+            if (seconds < best_seconds) {
+                best_seconds = seconds;
+                ns_per_round_trip = ns;
+            }
+        }
+        std::printf("  %-9s %10d round trips in %7.3fs  %8.2f M/s      %8.1f ns/call\n", "hle",
+                    iterations, best_seconds, double(iterations) / best_seconds / 1e6,
+                    ns_per_round_trip);
     }
 
     return 0;
