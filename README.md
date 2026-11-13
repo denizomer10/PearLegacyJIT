@@ -1,7 +1,7 @@
 # PearLegacyJIT
 
-A Dynarmic-based dynamic recompiler, specialized for **PearLegacyEngine** on
-Apple Silicon.
+**An ARMv7/Thumb-2 dynamic recompiler for Apple silicon, built on Dynarmic for
+[PearLegacyEngine](https://github.com/denizomer10/PearLegacyEngine).**
 
 PearLegacyJIT is a fork of [Dynarmic](https://github.com/MerryMage/dynarmic),
 the ARM dynamic recompiler written by **merryhime** (`MerryMage`,
@@ -269,6 +269,17 @@ when a change looks suspicious.
 * An adversarial guest can detect that it runs under Dynarmic. That is an
   upstream property, and this fork does not try to hide it.
 
+## The Pear stack
+
+| Project | Role |
+| --- | --- |
+| [PearSilicon](https://github.com/denizomer10/PearSilicon) | macOS app: library, installer, launcher |
+| [PearRuntime](https://github.com/denizomer10/PearRuntime) | compatibility layer for arm64 iOS apps |
+| [PearANGLE](https://github.com/denizomer10/PearANGLE) | OpenGL ES on Metal (ANGLE fork) |
+| [PearLegacyEngine](https://github.com/denizomer10/PearLegacyEngine) | 32-bit iOS engine (touchHLE fork) |
+| **PearLegacyJIT** | ARMv7 recompiler (Dynarmic fork) |
+| [PearDebug](https://github.com/denizomer10/PearDebug) | logging and diagnostics |
+
 ## Credits
 
 * Dynarmic and its AArch64 backend: **merryhime** and the Dynarmic
@@ -278,4 +289,22 @@ when a change looks suspicious.
 * PearLegacyEngine integration and the `pearlegacy-apple-silicon` profile:
   PearLegacyEngine contributors.
 
-Licensed under the same terms as Dynarmic; see [LICENSE.txt](LICENSE.txt).
+## License
+
+PearLegacyJIT is distributed under the same 0BSD terms as Dynarmic; see
+[LICENSE.txt](LICENSE.txt). The bundled libraries in `externals/` keep their own
+licenses, and binaries that contain them must reproduce those notices:
+
+| Library | Used for | License |
+| --- | --- | --- |
+| [fmt](externals/fmt/LICENSE) | formatting | MIT |
+| [mcl](externals/mcl/LICENSE) | utility headers | MIT |
+| [oaknut](externals/oaknut/LICENSE) | AArch64 code emitter (Apple silicon backend) | MIT |
+| [robin-map](externals/robin-map/LICENSE) | hash maps | MIT |
+| [biscuit](externals/biscuit/LICENSE.md) | RISC-V emitter (not built for arm64) | MIT |
+| [xbyak](externals/xbyak/COPYRIGHT) | x86-64 emitter (not built for arm64) | BSD-3-Clause |
+| [zycore](externals/zycore/LICENSE), [zydis](externals/zydis/LICENSE) | x86 disassembly (not built for arm64) | MIT |
+| [Catch2](externals/catch/LICENSE.txt) | tests only | BSL-1.0 |
+| Boost (system headers, not bundled) | header-only utilities | BSL-1.0 |
+
+PearLegacyEngine reproduces these notices in `touchHLE --copyright`.
